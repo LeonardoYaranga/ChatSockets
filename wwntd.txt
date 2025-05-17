@@ -1,0 +1,16 @@
+Aplicacion: un chat usando Node.js, y usando react.js
+(hoy servidor, lunes cliente, miercoles aplicativo final)
+
+Nosotros: nos contratan pa organizar un congreso de la U 
+y debemos crear 10 salas, para el siguiente 5 salas, 
+1. crear N salas de chat.
+2. Validar que de un mismo host no se conecten mas de un usuario
+(una sala por cada persona/host).
+3. Limitar el numero de asistentes a cada sala
+(creo 5 salas y cada una con un maximo de 5 participantes).
+4. cada sala al crear se creara con un PIN aleatorio (ejm. numero de 4 digitos/caracteres especiales).
+Flujo: abro app - creo salas de chat (con x clientes) - al conectar un cliente ingresa y se conecta,
+si abre otro navegador para entrar a otra sala no se debe permitir (solo usar Web-Sockets, nada de API rest).
+(se debe colocar la sala y el PIN, ya que no seran visibles para todos)
+(1 el server (igual se conecta a una sala), los demas clientes),
+Usar una red privada (datos xd), maquinas virtuales.

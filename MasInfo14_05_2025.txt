@@ -1,0 +1,9 @@
+
+Que en otra pestania o incognita no se pueda unir otro usuario
+
+
+Subir a GitHub, con las instrucciones para usarlos
+
+Podemos hacerle el deploy, con railway o vercel que es un plus
+
+Se podria unirse desde una VM? Deberia porq deberi tener otra ip?

@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Chat con Socket.IO</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.js"></script>
+</head>
+
+<body>
+    <h1>Chat con Socket.IO</h1>
+
+    <div>
+        <h2>Crear Sala</h2>
+        <input id="maxClients" type="number" placeholder="Máximo de clientes (1-10)" min="1" max="10">
+        <button onclick="createRoom()">Crear Sala</button>
+        <p id="roomInfo"></p>
+    </div>
+
+    <div>
+        <h2>Unirse a Sala</h2>
+        <input id="joinRoomId" placeholder="ID de la sala">
+        <input id="pin" placeholder="PIN">
+        <button onclick="joinRoom()">Unirse</button>
+    </div>
+
+    <div id="chat" style="display: none;">
+        <h2>Sala: <span id="currentRoom"></span></h2>
+        <div id="messages"></div>
+        <input id="message" placeholder="Escribe un mensaje">
+        <button onclick="sendMessage()">Enviar</button>
+    </div>
+
+    <script>
+        const socket = io('http://localhost:5000');
+        const clientId = Math.random().toString(36).substring(2); // ID único
+
+        socket.on('connect', () => {
+            console.log('Conectado al servidor');
+        });
+
+        socket.on('host_info', (info) => {
+            console.log('Información del cliente:', info);
+        });
+
+        socket.on('room_created', ({ roomId, pin }) => {
+            document.getElementById('roomInfo').textContent = `Sala ${roomId} creada con PIN: ${pin}`;
+        });
+
+        socket.on('joined_room', ({ roomId }) => {
+            document.getElementById('chat').style.display = 'block';
+            document.getElementById('currentRoom').textContent = roomId;
+        });
+
+        socket.on('receive_message', ({ clientId, message }) => {
+            const messages = document.getElementById('messages');
+            messages.innerHTML += `<p><b>${clientId}</b>: ${message}</p>`;
+            messages.scrollTop = messages.scrollHeight;
+        });
+
+        socket.on('user_joined', ({ clientId }) => {
+            const messages = document.getElementById('messages');
+            messages.innerHTML += `<p><i>${clientId} se unió a la sala</i></p>`;
+        });
+
+        socket.on('user_left', ({ clientId }) => {
+            const messages = document.getElementById('messages');
+            messages.innerHTML += `<p><i>${clientId} salió de la sala</i></p>`;
+        });
+
+        socket.on('error', ({ message }) => {
+            alert(message);
+        });
+
+        function createRoom() {
+            const maxClients = parseInt(document.getElementById('maxClients').value);
+            if (isNaN(maxClients) || maxClients < 1 || maxClients > 10) {
+                alert('Ingresa un número de clientes entre 1 y 10');
+                return;
+            }
+            socket.emit('create_room', { maxClients });
+        }
+
+        function joinRoom() {
+            const roomId = document.getElementById('joinRoomId').value;
+            const pin = document.getElementById('pin').value;
+            if (!roomId || !pin) {
+                alert('Ingresa el ID de la sala y el PIN');
+                return;
+            }
+            socket.emit('join_room', { roomId, pin, clientId });
+        }
+
+        function sendMessage() {
+            const message = document.getElementById('message').value;
+            const roomId = document.getElementById('currentRoom').textContent;
+            if (!message || !roomId) return;
+            socket.emit('send_message', { roomId, message, clientId });
+            document.getElementById('message').value = '';
+        }
+    </script>
+</body>
+
+</html>
