@@ -3,151 +3,246 @@ import express from "express";
 import http from "http";
 import cors from "cors";
 import { Server } from "socket.io";
-import dns from "dns";
+import mysql from "mysql2/promise";
 
-//require("dotenv").config();
-// const express = require("express");
-// const http = require("http");
-// const cors = require("cors");
-// const {Server} = require("socket.io");
-// const dns = require("dns");
-
-//iniciar una aplicacion express
+// Iniciar una aplicación Express
 const app = express();
-app.use(cors({ origin: process.env.CORS_ORIGIN }));
+app.use(cors({ origin: "*" }));
+app.use(express.json());
 
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: process.env.CORS_ORIGIN } });
+const io = new Server(server, { cors: { origin: "*" } });
 
-// Estado del servidor
-const rooms = new Map(); // { roomId: { pin, clients, maxClients } }
-const clientToRoom = new Map(); // { clientId: roomId }
-const ipToRoom = new Map(); // { clientIp: roomId }
-let nextRoomId = 1; // Contador para IDs de salas
+// Configuración de la base de datos
+const db = mysql.createPool({
+  host: process.env.DB_HOST || "localhost",
+  user: process.env.DB_USER || "root",
+  password: process.env.DB_PASSWORD || "1234",
+  database: process.env.DB_NAME || "ChatWebSocket"
+});
+
 // Generar PIN aleatorio
 function generatePin() {
   return Math.floor(100000 + Math.random() * 900000).toString(); // PIN de 6 dígitos
 }
+
+// Endpoint para crear usuario
+app.post("/api/users", async (req, res) => {
+  const { nickname, device_id } = req.body;
+  if (!nickname || !device_id) {
+    return res.status(400).json({ error: "Nickname y device_id son requeridos" });
+  }
+  try {
+    const [existingUser] = await db.query("SELECT id FROM users WHERE nickname = ?", [nickname]);
+    let user_id;
+    if (existingUser[0]) {
+      user_id = existingUser[0].id;
+    } else {
+      const [result] = await db.query("INSERT INTO users (nickname, device_id) VALUES (?, ?)", [nickname, device_id]);
+      user_id = result.insertId;
+    }
+
+    // Buscar sesión activa
+    const [session] = await db.query(
+      `SELECT s.sala_id, r.pin FROM sessions s JOIN salas r ON s.sala_id = r.id WHERE s.user_id = ? AND s.device_id = ?`,
+      [user_id, device_id]
+    );
+    if (session[0]) {
+      // Ya tiene sesión activa, devolver info de la sala
+      return res.json({ user_id, nickname, sala: { pin: session[0].pin } });
+    }
+
+    res.json({ user_id, nickname });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Error al crear el usuario" });
+  }
+});
+
+// Crear una sala (HTTP endpoint)
+app.post("/api/salas", async (req, res) => {
+  const { max_users } = req.body;
+  if (!Number.isInteger(max_users) || max_users < 1 || max_users > 10) {
+    return res.status(400).json({ error: "El número máximo de usuarios debe estar entre 1 y 10" });
+  }
+
+  let pin;
+  try {
+    do {
+      pin = generatePin();
+      const [rows] = await db.query("SELECT 1 FROM salas WHERE pin = ?", [pin]);
+      if (rows.length === 0) break;
+    } while (true);
+
+    const [result] = await db.query("INSERT INTO salas (pin, max_users) VALUES (?, ?)", [pin, max_users]);
+    res.json({ pin, sala_id: result.insertId });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Error al crear la sala" });
+  }
+});
+
+const disconnectTimeouts = {};
+const activeSockets = {};
+const activeUsers = {};
+
 // Manejar conexiones
 io.on("connection", (socket) => {
-  const clientIp =
-    socket.handshake.address.replace("::ffff:", "") || socket.handshake.address;
-  console.log("Cliente conectado:", clientIp);
-
-  dns.reverse(clientIp, (err, hostnames) => {
-    const hostname = err ? clientIp : hostnames[0];
-    console.log("Client hostname:", hostname);
-    socket.emit("host_info", { host: hostname, ip: clientIp });
-  });
-
-  // Crear una sala
-  socket.on("create_room", ({ maxClients }) => {
-    // Validar maxClients
-    if (!Number.isInteger(maxClients) || maxClients < 1 || maxClients > 10) {
-      socket.emit("error", {
-        message: "El número máximo de clientes debe estar entre 1 y 10",
-      });
-      return;
-    }
-
-    // Verificar si el cliente (IP) ya está en una sala
-    if (ipToRoom.has(clientIp)) {
-      socket.emit("error", {
-        message: "Ya estás conectado a una sala desde esta IP",
-      });
-      return;
-    }
-
-    const roomId = nextRoomId.toString(); // Generar ID incremental
-    const pin = generatePin();
-    rooms.set(roomId, {
-      pin,
-      clients: new Set(),
-      maxClients,
-    });
-    nextRoomId++;
-    console.log(`Sala ${roomId} creada con PIN: ${pin}`);
-    socket.emit("room_created", { roomId, pin });
-  });
+  console.log("Cliente conectado:", socket.id, "IP:", socket.handshake.address);
 
   // Unirse a una sala
-  socket.on("join_room", ({ roomId, pin, clientId }) => {
-    // Verificar si el cliente (clientId) ya está en una sala
-    if (clientToRoom.has(clientId)) {
-      socket.emit("error", { message: "Ya estás conectado a una sala" });
-      return;
-    }
+  socket.on("join_room", async ({ pin, user_id, device_id }) => {
+    try {
+      socket.user_id = user_id; 
+      // Desconectar socket anterior si existe
+      if (activeSockets[device_id] && activeSockets[device_id].id !== socket.id) {
+        activeSockets[device_id].emit("error", "Se ha iniciado sesión en otra pestaña o ventana.");
+        activeSockets[device_id].disconnect(true);
+      }
+      activeSockets[device_id] = socket;
 
-    // Verificar si el cliente (IP) ya está en una sala
-    if (ipToRoom.has(clientIp)) {
-      socket.emit("error", {
-        message: "Ya estás conectado a una sala desde esta IP",
-      });
-      return;
-    }
+      if (activeUsers[user_id] && activeUsers[user_id].id !== socket.id) {
+        activeUsers[user_id].emit("session_conflict", "Se ha iniciado sesión en otro dispositivo.");
+        activeUsers[user_id].disconnect(true);
+      }
+      activeUsers[user_id] = socket;
 
-    const room = rooms.get(roomId);
-    if (!room) {
-      socket.emit("error", { message: "La sala no existe" });
-      return;
-    }
-    if (room.pin !== pin) {
-      socket.emit("error", { message: "PIN incorrecto" });
-      return;
-    }
-    if (room.clients.size >= room.maxClients) {
-      socket.emit("error", { message: "Sala llena" });
-      return;
-    }
+      if (disconnectTimeouts[device_id]) {
+        clearTimeout(disconnectTimeouts[device_id]);
+        delete disconnectTimeouts[device_id];
+      }
 
-    // Unir al cliente a la sala
-    room.clients.add(socket.id);
-    clientToRoom.set(clientId, roomId);
-    ipToRoom.set(clientIp, roomId);
-    socket.join(roomId);
-    socket.emit("joined_room", { roomId });
+      // Buscar la sala por PIN
+      const [sala] = await db.query("SELECT id FROM salas WHERE pin = ?", [pin]);
+      if (!sala[0]) {
+        return socket.emit("error", "Sala no encontrada");
+      }
+      const sala_id = sala[0].id;
 
-    io.to(roomId).emit("user_joined", { clientId });
-    console.log(`Cliente ${clientId} se unió a la sala ${roomId}`);
+      // Verificar si ya existe una sesión para este user_id y device_id en esta sala
+      const [existingSession] = await db.query(
+        "SELECT id, sala_id FROM sessions WHERE user_id = ? AND device_id = ?",
+        [user_id, device_id]
+      );
+
+      // Unir el socket a la sala de Socket.IO
+      socket.join(pin);
+      socket.device_id = device_id;
+
+      if (!existingSession[0] || existingSession[0].sala_id !== sala_id) {
+        // Elimina cualquier sesión previa (de otra sala)
+        await db.query(
+          "DELETE FROM sessions WHERE user_id = ? AND device_id = ?",
+          [user_id, device_id]
+        );
+        // Crea la nueva sesión solo si no existe para esta sala
+        await db.query(
+          "INSERT INTO sessions (user_id, sala_id, device_id) VALUES (?, ?, ?)",
+          [user_id, sala_id, device_id]
+        );
+      }
+
+      // Obtener historial de mensajes
+      const [messages] = await db.query(
+        `SELECT m.message, u.nickname, m.create_at
+         FROM messages m
+         JOIN users u ON m.user_id = u.id
+         WHERE m.sala_id = ?
+         ORDER BY m.create_at ASC`,
+        [sala_id]
+      );
+      socket.emit("message_history", messages);
+
+      // ...dentro de join_room...
+      const [users] = await db.query(
+        "SELECT u.nickname FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.sala_id = ?",
+        [sala_id]
+      );
+      io.to(pin).emit("user_list", users.map(u => u.nickname));
+
+      // Notificar solo el último usuario que se unió
+      if (users.length > 0) {
+        const lastUser = users[users.length - 1].nickname;
+        console.log("Se unio el usuario", lastUser ," a la sala: ", pin, " Con socketId: ", socket.id)
+        io.to(pin).emit("system_message", `Se ha unido ${lastUser}`);
+      }
+
+      // Notificar unión exitosa
+      socket.emit("joined_room", { pin, user_id });
+
+    } catch (error) {
+      console.error(error);
+      socket.emit("error", "Error al unirse a la sala");
+    }
   });
 
   // Enviar mensaje
-  socket.on("send_message", ({ roomId, message, clientId }) => {
-    const room = rooms.get(roomId);
-    if (room && room.clients.has(socket.id)) {
-      io.to(roomId).emit("receive_message", { clientId, message });
-      console.log(`Mensaje en sala ${roomId} de ${clientId}: ${message}`);
+  socket.on("send_message", async ({ pin, message, user_id }) => {
+    try {
+      const [session] = await db.query(
+        "SELECT s.id, s.sala_id FROM sessions s JOIN salas r ON s.sala_id = r.id WHERE s.user_id = ? AND r.pin = ?",
+        [user_id, pin]
+      );
+      if (!session[0]) {
+        socket.emit("error", "No estás en esta sala");
+        return;
+      }
+
+      const [user] = await db.query("SELECT nickname FROM users WHERE id = ?", [user_id]);
+      await db.query("INSERT INTO messages (message, user_id, sala_id) VALUES (?, ?, ?)", 
+        [message, user_id, session[0].sala_id]);
+      
+      io.to(pin).emit("receive_message", { 
+        nickname: user[0].nickname, 
+        message, 
+        create_at: new Date().toISOString() 
+      });
+      console.log(`Mensaje en sala ${pin} de ${user[0].nickname}: ${message}`);
+    } catch (error) {
+      console.error(error);
+      socket.emit("error", "Error al enviar el mensaje");
     }
   });
 
   // Manejar desconexión
-  socket.on("disconnect", () => {
-    const roomId = clientToRoom.get(socket.id);
-    if (roomId) {
-      const room = rooms.get(roomId);
-      if (room) {
-        room.clients.delete(socket.id);
-        clientToRoom.delete(socket.id);
-        ipToRoom.delete(clientIp);
-        io.to(roomId).emit("user_left", { clientId: socket.id });
-        console.log(`Cliente ${socket.id} salió de la sala ${roomId}`);
-
-        if (room.clients.size === 0) {
-          rooms.delete(roomId);
-          console.log(`Sala ${roomId} eliminada`);
-        }
-      }
+  socket.on("disconnect", async () => {
+    if (!socket.device_id) return;
+    if (socket.user_id && activeUsers[socket.user_id] === socket) {
+      delete activeUsers[socket.user_id];
     }
-    console.log("Cliente desconectado:", clientIp);
-  });
+    disconnectTimeouts[socket.device_id] = setTimeout(async () => {
+      try {
+        const [session] = await db.query(
+          "SELECT s.sala_id, r.pin FROM sessions s JOIN salas r ON s.sala_id = r.id WHERE s.device_id = ?",
+          [socket.device_id]
+        );
+        if (session[0]) {
+          const { sala_id, pin } = session[0];
+          await db.query("DELETE FROM sessions WHERE device_id = ?", [socket.device_id]);
+          
+          // Actualizar lista de usuarios
+          const [users] = await db.query(
+            "SELECT u.nickname FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.sala_id = ?",
+            [sala_id]
+          );
+          io.to(pin).emit("user_list", users.map(u => u.nickname));
 
-  // socket.on("send_message", (msg) => {
-  //   console.log(`Mensaje recibido: de ${clientIp}: ${msg}`); //Esto no se hace, por privacidad
-  //   socket.emit("receive_message", msg);
-  // });
-  // socket.on("disconnect", () => {
-  //   console.log("Cliente desconectado:", clientIp);
-  // });
+          // Eliminar sala si está vacía
+          const [sessions] = await db.query("SELECT COUNT(*) as count FROM sessions WHERE sala_id = ?", [sala_id]);
+          const [messageCount] = await db.query("SELECT COUNT(*) AS count FROM messages WHERE sala_id = ?", [sala_id]);
+          if (sessions[0].count === 0 && messageCount[0].count === 0) {
+            await db.query("DELETE FROM salas WHERE id = ?", [sala_id]);
+            console.log(`Sala ${pin} eliminada`);
+          }
+          console.log(`Cliente desconectado de la sala ${pin}`);
+        }
+      } catch (error) {
+        console.error(error);
+      }
+      console.log("Cliente desconectado:", socket.id, "IP:", socket.handshake.address);
+      delete disconnectTimeouts[socket.device_id];
+    }, 3000);
+  });
 });
 
 const PORT = process.env.PORT || 5000;
