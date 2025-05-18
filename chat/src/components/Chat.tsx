@@ -1,188 +1,379 @@
-import React, { useEffect, useRef } from "react";
-import { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
-
 import { InputText } from "primereact/inputtext";
 import { Toast } from "primereact/toast";
 import { Button } from "primereact/button";
-import { InputNumber } from "primereact/inputnumber";
 import { InputTextarea } from "primereact/inputtextarea";
 import { Card } from "primereact/card";
-//VALOR DE LA VARIABLE DE ENTORNO en VITE
-const API_URL = import.meta.env.VITE_SOCKET_SERVER_URL!;
-console.log(API_URL);
+import { RoomForm } from "./RoomForm";
+import { MessageList } from "./MessageList";
+
+const API_URL =
+  import.meta.env.VITE_SOCKET_SERVER_URL || "http://localhost:5000";
+console.log("API_URL:", API_URL);
 
 interface Message {
-  //  author: string;
-  clientId: string;
+  nickname: string;
   message: string;
-  roomId?: string;
-  //timestamp: string;
-}
-
-interface HostInfo {
-  host: string;
-  ip: string;
+  create_at: string;
 }
 
 export const Chat: React.FC = () => {
-  //usestate
-  const [nickName, setNickName] = useState<string>("");
+  const [nickName, setNickName] = useState<string>(
+    () => localStorage.getItem("nickname") || ""
+  );
   const [tempNickName, setTempNickName] = useState<string>("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [message, setMessage] = useState<string>("");
-  const [hostInfo, setHostInfo] = useState<HostInfo>({
-    host: "",
-    ip: "",
-  });
   const [connected, setConnected] = useState<boolean>(false);
-  const socketRef = useRef<Socket | null>(null);
-  const [roomId, setRoomId] = useState<string>("");
   const [pin, setPin] = useState<string>("");
   const [isInRoom, setIsInRoom] = useState<boolean>(false);
-  const [currentRoom, setCurrentRoom] = useState<string>("");
+  const [currentPin, setCurrentPin] = useState<string>("");
   const [maxClients, setMaxClients] = useState<number>(10);
-  const [joinRoomId, setJoinRoomId] = useState("");
-
-  const [socket, setSocket] = useState<Socket | null>(null);
+  const [userId, setUserId] = useState<number | null>(null);
+  const socketRef = useRef<Socket | null>(null);
   const toast = useRef<Toast>(null);
-  useEffect(() => {
-    if (nickName) return;
-    //crear la conexion
+  const [showParticipants, setShowParticipants] = useState(false);
+  const [participants, setParticipants] = useState<string[]>([]);
+  const [socketReady, setSocketReady] = useState(false);
+  const [wasSessionConflict, setWasSessionConflict] = useState(false);
 
-    setSocket((socketRef.current = io(API_URL)));
-    socketRef.current.on("connect", () => {
-      //
+  // Generar o recuperar device_id
+  const [deviceId] = useState<string>(() => {
+    const storedId = localStorage.getItem("device_id");
+    if (storedId) return storedId;
+    const newId = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
+      /[xy]/g,
+      (c) => {
+        const r = (Math.random() * 16) | 0;
+        return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+      }
+    );
+    localStorage.setItem("device_id", newId);
+    return newId;
+  });
+
+  // Inicializar socket y eventos
+  useEffect(() => {
+    socketRef.current = io(API_URL, {
+      transports: ["websocket"],
+      autoConnect: false,
+    });
+    const socket = socketRef.current;
+    setSocketReady(true);
+
+    socket.on("connect", () => {
       setConnected(true);
+      console.log("Conectado al servidor");
     });
-    socketRef.current.on("host_info", (data: HostInfo) => {
-      setHostInfo(data);
-    });
-    socketRef.current.on(
+
+    socket.on(
       "room_created",
-      ({ roomId, pin }: { roomId: string; pin: string }) => {
-        setRoomId(roomId);
+      ({ pin, sala_id }: { pin: string; sala_id: number }) => {
         setPin(pin);
-        alert(`Room created with ID: ${roomId} and PIN: ${pin}`);
-        console.log(`Room created with ID: ${roomId} and PIN: ${pin}`);
-        // toast.current?.show({
-        //   severity: "success",
-        //   summary: "Sala Creada",
-        //   detail: `Sala ${roomId} con PIN: ${pin}`,
-        // });
+        toast.current?.show({
+          severity: "success",
+          summary: "Sala Creada",
+          detail: `Sala con PIN: ${pin}`,
+        });
       }
     );
 
-    socketRef.current.on("room_joined", (data: { roomId: string }) => {
-      setCurrentRoom(roomId);
-      setIsInRoom(true);
-      setRoomId(data.roomId);
-      setMessages([]); // Limpiar mensajes al unirse a una nueva sala
-      alert(`Joined room with ID: ${data.roomId}`);
-      console.log(`Joined room with ID: ${data.roomId}`);
-      // toast.current?.show({
-      //   severity: "success",
-      //   summary: "Sala Unida",
-      //   detail: `Unido a la sala ${data.roomId}`,
-      // });
+    socket.on(
+      "joined_room",
+      ({ pin, user_id }: { pin: string; user_id: number }) => {
+        setCurrentPin(pin);
+        setIsInRoom(true);
+        setUserId(user_id);
+        toast.current?.show({
+          severity: "success",
+          summary: "Sala Unida",
+          detail: `Unido a la sala con PIN: ${pin}`,
+        });
+      }
+    );
+
+    socket.on("message_history", (messages: Message[]) => {
+      setMessages(messages);
     });
 
-    socketRef.current.on("receive_message", (data: Message) => {
+    socket.on("receive_message", (data: Message) => {
       setMessages((prev) => [...prev, data]);
     });
 
-    socketRef.current.on(
-      "user_joined",
-      ({ clientId }: { clientId: string }) => {
-        setMessages((prev) => [
-          ...prev,
-          { clientId, message: `${clientId} se unió a la sala` },
-        ]);
-      }
-    );
-    socketRef.current.on("user_left", ({ clientId }: { clientId: string }) => {
+    socket.on("system_message", (msg: string) => {
       setMessages((prev) => [
         ...prev,
-        { clientId, message: `${clientId} salió de la sala` },
+        {
+          nickname: "Sistema",
+          message: msg,
+          create_at: new Date().toISOString(),
+        },
       ]);
     });
 
-    socketRef.current.on("error", (error: string) => {
-      console.error("Socket error:", error);
-      // Handle error here, e.g., show a toast notification
-      // toast.current?.show({
-      //   severity: "error",
-      //   summary: "Error",
-      //   detail: error,
-      // });
+    socket.on("user_list", (users: string[]) => {
+      setParticipants(users);
     });
 
-    socketRef.current.on("disconnect", () => {
+    socket.on("error", (message: string) => {
+      console.error("Error del servidor:", message);
+      toast.current?.show({
+        severity: "error",
+        summary: "Error",
+        detail: message,
+      });
+    });
+
+    socket.on("session_conflict", (msg: string) => {
+      setWasSessionConflict(true);
+      toast.current?.show({
+        severity: "warn",
+        summary: "Sesión cerrada",
+        detail: msg || "Se ha iniciado sesión en otro dispositivo.",
+      });
+      // Opcional: limpiar estado, cerrar sesión, etc.
+      setNickName("");
+      setUserId(null);
+      setIsInRoom(false);
+      setCurrentPin("");
+      setPin("");
+      setMessages([]);
+      localStorage.removeItem("nickname");
+      localStorage.removeItem("device_id");
+    });
+
+    socket.on("disconnect", () => {
       setConnected(false);
       setIsInRoom(false);
-      setCurrentRoom("");
+      setCurrentPin("");
       setMessages([]);
-      // toast.current?.show({
-      //   severity: "warn",
-      //   summary: "Desconectado",
-      //   detail: "Se perdió la conexión con el servidor",
-      // });
+      if (!wasSessionConflict && nickName) {
+        toast.current?.show({
+          severity: "warn",
+          summary: "Desconectado",
+          detail: "Se perdió la conexión con el servidor",
+        });
+      }
+      else {
+        toast.current?.show({
+          severity: "info",
+          summary: "Sesión cerrada",
+          detail: "Se ha cerrado la sesión por otro dispositivo",
+        });
+      }
+      setWasSessionConflict(false); 
     });
-    return () => {
-      socketRef.current?.disconnect();
-      socketRef.current = null;
-      // socketRef.current?.on("disconnect", () => {
-      //   setConnected(false);
 
-      // });
+    return () => {
+      socket.disconnect();
+      socketRef.current = null;
     };
   }, []);
 
-  const handleNickName = () => {
-    const trimNickName = tempNickName.trim();
-    if (!trimNickName) return;
-    setNickName(trimNickName);
-  };
-  // Crear sala
-  const createRoom = () => {
-    if (!maxClients || maxClients < 1 || maxClients > 10) {
-      // toast.current?.show({
-      //   severity: "error",
-      //   summary: "Error",
-      //   detail: "Ingresa un número de clientes entre 1 y 10",
-      // });
-      return;
+  useEffect(() => {
+    if ((socketReady && nickName && deviceId)) {
+      autoLogin(nickName, deviceId);
     }
-    socketRef.current?.emit("create_room", { maxClients });
+  }, [socketReady, nickName, deviceId]);
+
+  // Función para autologin al recargar si hay nickname guardado
+  const autoLogin = async (nickname: string, device_id: string) => {
+    try {
+      const response = await fetch(`${API_URL}/api/users`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nickname, device_id }),
+      });
+      const data = await response.json();
+      if (response.ok) {
+        setNickName(nickname);
+        setUserId(data.user_id);
+
+        // Solo emitir join_room si el socket NO está conectado
+        if (!socketRef.current?.connected) {
+          socketRef.current?.once("connect", () => {
+            if (data.sala && data.sala.pin) {
+              setPin(data.sala.pin);
+              setCurrentPin(data.sala.pin);
+              setIsInRoom(true);
+              socketRef.current?.emit("join_room", {
+                pin: data.sala.pin,
+                user_id: data.user_id,
+                device_id,
+              });
+            }
+          });
+          socketRef.current?.connect();
+        } else {
+          // Si ya está conectado, solo emite join_room una vez
+          if (data.sala && data.sala.pin) {
+            setPin(data.sala.pin);
+            setCurrentPin(data.sala.pin);
+            setIsInRoom(true);
+            socketRef.current?.emit("join_room", {
+              pin: data.sala.pin,
+              user_id: data.user_id,
+              device_id,
+            });
+          }
+        }
+      }
+    } catch (error) {
+      toast.current?.show({
+        severity: "error",
+        summary: "Error",
+        detail: "Error al reconectar sesión",
+      });
+    }
   };
 
-  // Unirse a sala
-  const joinRoom = () => {
-    if (!joinRoomId || !pin) {
-      // toast.current?.show({
-      //   severity: "error",
-      //   summary: "Error",
-      //   detail: "Ingresa el ID de la sala y el PIN",
-      // });
+  const handleNickName = async (e?: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e && e.key !== "Enter" && e.type !== "click") return;
+    const trimNickName = tempNickName.trim();
+    if (!trimNickName) {
+      toast.current?.show({
+        severity: "error",
+        summary: "Error",
+        detail: "Ingresa un nickname válido",
+      });
       return;
     }
+
+    try {
+      const response = await fetch(`${API_URL}/api/users`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nickname: trimNickName, device_id: deviceId }),
+      });
+      const data = await response.json();
+      if (response.ok) {
+        setNickName(trimNickName);
+        setUserId(data.user_id);
+        localStorage.setItem("nickname", trimNickName); // Guardar nickname
+        socketRef.current?.connect();
+
+        // Si ya hay una sala activa, reconectar automáticamente
+        if (data.sala && data.sala.pin) {
+          setPin(data.sala.pin);
+          setCurrentPin(data.sala.pin);
+          setIsInRoom(true);
+          socketRef.current?.emit("join_room", {
+            pin: data.sala.pin,
+            user_id: data.user_id,
+            device_id: deviceId,
+          });
+        } else {
+          toast.current?.show({
+            severity: "success",
+            summary: "Usuario Creado",
+            detail: `Nickname ${trimNickName} registrado`,
+          });
+        }
+      } else {
+        toast.current?.show({
+          severity: "error",
+          summary: "Error",
+          detail: data.error,
+        });
+      }
+    } catch (error) {
+      toast.current?.show({
+        severity: "error",
+        summary: "Error",
+        detail: "Error al conectar con el servidor",
+      });
+    }
+  };
+
+  // Función para cerrar sesión
+  const logout = () => {
+    localStorage.removeItem("nickname");
+    localStorage.removeItem("device_id");
+    setNickName("");
+    setUserId(null);
+    setIsInRoom(false);
+    setCurrentPin("");
+    setPin("");
+    setMessages([]);
+    socketRef.current?.disconnect();
+    toast.current?.show({
+      severity: "info",
+      summary: "Sesión cerrada",
+      detail: "Has cerrado sesión correctamente",
+    });
+  };
+
+  const createRoom = async () => {
+    if (!maxClients || maxClients < 1 || maxClients > 10) {
+      toast.current?.show({
+        severity: "error",
+        summary: "Error",
+        detail: "Ingresa un número de clientes entre 1 y 10",
+      });
+      return;
+    }
+    try {
+      const response = await fetch(`${API_URL}/api/salas`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ max_users: maxClients }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        toast.current?.show({
+          severity: "error",
+          summary: "Error",
+          detail: data.error,
+        });
+      } else {
+        const messageSala = "Sala Creada con codigo " + data.pin;
+        toast.current?.show({
+          severity: "success",
+          summary: messageSala,
+        });
+      }
+    } catch (error) {
+      console.error("Error al crear sala:", error);
+      toast.current?.show({
+        severity: "error",
+        summary: "Error",
+        detail: "Error al crear la sala",
+      });
+    }
+  };
+
+  const joinRoom = () => {
+    if (!pin || !userId) {
+      toast.current?.show({
+        severity: "error",
+        summary: "Error",
+        detail: "Ingresa el PIN y asegúrate de estar registrado",
+      });
+      return;
+    }
+    console.log("Intentando unirse a sala con PIN:", pin, "user_id:", userId);
     socketRef.current?.emit("join_room", {
-      roomId: joinRoomId,
       pin,
-      clientId: nickName,
+      user_id: userId,
+      device_id: deviceId,
     });
   };
 
   const sendMessage = () => {
-    if (!message.trim() || !connected) return;
-    const msg: Message = {
-      clientId: nickName,
-      message: message,
-      roomId: currentRoom,
-    };
-
-    socketRef.current?.emit("send_message", msg);
-    setMessages((prev) => [...prev, msg]); //Quiza esto puede poner 2 veces el mensaje
+    if (!message.trim() || !connected || !isInRoom) {
+      toast.current?.show({
+        severity: "error",
+        summary: "Error",
+        detail: "Escribe un mensaje y asegúrate de estar en una sala",
+      });
+      return;
+    }
+    socketRef.current?.emit("send_message", {
+      pin: currentPin,
+      message,
+      user_id: userId,
+    });
     setMessage("");
   };
 
@@ -197,6 +388,7 @@ export const Chat: React.FC = () => {
                 id="nickName"
                 value={tempNickName}
                 onChange={(e) => setTempNickName(e.target.value)}
+                onKeyDown={handleNickName}
                 placeholder="Escribe tu NickName"
               />
             </div>
@@ -204,7 +396,7 @@ export const Chat: React.FC = () => {
               label="Conectar"
               icon="pi pi-check"
               className="p-button-raised p-button-info"
-              onClick={handleNickName}
+              onClick={() => handleNickName()}
             />
           </div>
         </Card>
@@ -217,79 +409,57 @@ export const Chat: React.FC = () => {
       <div className="p-4">
         <Toast ref={toast} />
         <h1>Chat con Socket.IO</h1>
-        <div className="grid">
-          <div className="col-12 md:col-6">
-            <Card title="Crear Sala">
-              <div className="p-fluid">
-                <div className="field">
-                  <label htmlFor="maxClients">Máximo de Clientes (1-10)</label>
-                  <InputNumber
-                    id="maxClients"
-                    value={maxClients}
-                    onValueChange={(e) => setMaxClients(e.value!)}
-                    min={1}
-                    max={10}
-                    showButtons
-                  />
-                </div>
-                <Button
-                  label="Crear Sala"
-                  onClick={createRoom}
-                  disabled={!socket}
-                />
-              </div>
-            </Card>
-          </div>
-        </div>
-
-        <div className="col-12 md:col-6">
-          <Card title="Unirse a Sala">
-            <div className="p-fluid">
-              <div className="field">
-                <label htmlFor="joinRoomId">ID de la Sala</label>
-                <InputText
-                  id="joinRoomId"
-                  value={joinRoomId}
-                  onChange={(e) => setJoinRoomId(e.target.value)}
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="pin">PIN</label>
-                <InputText
-                  id="pin"
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value)}
-                />
-              </div>
-              <Button label="Unirse" onClick={joinRoom} disabled={!socket} />
-            </div>
-          </Card>
-        </div>
+        <Button
+          label="Cerrar sesión"
+          icon="pi pi-sign-out"
+          className="p-button-raised p-button-secondary mb-3"
+          onClick={logout}
+        />
+        <RoomForm
+          maxClients={maxClients}
+          setMaxClients={setMaxClients}
+          createRoom={createRoom}
+          pin={pin}
+          setPin={setPin}
+          joinRoom={joinRoom}
+          connected={connected}
+          userId={userId}
+        />
       </div>
+      <Button
+        label="Mostrar participantes"
+        icon="pi pi-users"
+        className="p-button-raised p-button-info mb-3"
+        onClick={() => setShowParticipants(true)}
+      />
+
+      {/* Modal de participantes */}
+      {showParticipants && (
+        <div className="modal-participants">
+          <div className="modal-content">
+            <h3>Participantes activos</h3>
+            <ul>
+              {participants.map((p) => (
+                <li key={p}>{p}</li>
+              ))}
+            </ul>
+            <Button
+              label="Cerrar"
+              className="p-button-text"
+              onClick={() => setShowParticipants(false)}
+            />
+          </div>
+          <div
+            className="modal-backdrop"
+            onClick={() => setShowParticipants(false)}
+          />
+        </div>
+      )}
 
       {isInRoom && (
-        <Card title={`Chat de ${nickName} con numero de sala ${currentRoom}`}>
+        <Card title={`Chat de ${nickName} en sala ${currentPin}`}>
           <div className="p-fluid">
-            <div
-              className="field messages-container"
-              style={{
-                maxHeight: "300px",
-                overflowY: "auto",
-                marginBottom: "1rem",
-              }}
-            >
-              {messages.map((msg, index) => (
-                <p
-                  key={index}
-                  className={`message ${
-                    msg.clientId === nickName ? "me" : "other"
-                  }`}
-                >
-                  <strong>{msg.clientId}</strong>: {msg.message}
-                </p>
-              ))}
-            </div>
-
+            <MessageList messages={messages} nickName={nickName} />
             <div className="field input-chat">
               <InputTextarea
                 value={message}
@@ -299,11 +469,6 @@ export const Chat: React.FC = () => {
                 autoResize
                 className="w-full"
               />
-            </div>
-            <div className="host-info">
-              <p>
-                Host: {hostInfo.host} - IP: {hostInfo.ip}
-              </p>
             </div>
             <Button
               label="Enviar"
