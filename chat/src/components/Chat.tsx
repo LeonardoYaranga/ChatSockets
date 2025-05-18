@@ -7,6 +7,7 @@ import { InputTextarea } from "primereact/inputtextarea";
 import { Card } from "primereact/card";
 import { RoomForm } from "./RoomForm";
 import { MessageList } from "./MessageList";
+import { ParticipantsModal } from "./ParticipantesModal";
 
 const API_URL =
   import.meta.env.VITE_SOCKET_SERVER_URL || "http://localhost:5000";
@@ -406,7 +407,7 @@ export const Chat: React.FC = () => {
 
   return (
     <div className="app">
-      <div className="p-4">
+      <div className="pb-4 px-4">
         <Toast ref={toast} />
         <h1>Chat con Socket.IO</h1>
         <Button
@@ -433,27 +434,11 @@ export const Chat: React.FC = () => {
         onClick={() => setShowParticipants(true)}
       />
 
-      {/* Modal de participantes */}
       {showParticipants && (
-        <div className="modal-participants">
-          <div className="modal-content">
-            <h3>Participantes activos</h3>
-            <ul>
-              {participants.map((p) => (
-                <li key={p}>{p}</li>
-              ))}
-            </ul>
-            <Button
-              label="Cerrar"
-              className="p-button-text"
-              onClick={() => setShowParticipants(false)}
-            />
-          </div>
-          <div
-            className="modal-backdrop"
-            onClick={() => setShowParticipants(false)}
-          />
-        </div>
+        <ParticipantsModal
+          participants={participants}
+          onClose={() => setShowParticipants(false)}
+        />
       )}
 
       {isInRoom && (

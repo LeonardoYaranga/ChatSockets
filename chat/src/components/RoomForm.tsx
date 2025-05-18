@@ -15,8 +15,11 @@ export const RoomForm = ({
   <div className="grid">
     <div className="col-12 md:col-6">
       {/* Crear sala */}
-      <div className="p-fluid">
-        <label>Máximo de Clientes (1-10)</label>
+      <div
+        className="p-fluid"
+        style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
+      >
+        <label style={{ minWidth: 140 }}>Máximo de Clientes (1-10)</label>
         <InputNumber
           value={maxClients}
           onValueChange={(e) => setMaxClients(e.value!)}
@@ -33,8 +36,11 @@ export const RoomForm = ({
     </div>
     <div className="col-12 md:col-6">
       {/* Unirse a sala */}
-      <div className="p-fluid">
-        <label>PIN</label>
+      <div
+        className="p-fluid"
+        style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
+      >
+        <label style={{ minWidth: 40 }}>PIN</label>
         <InputText
           value={pin}
           onChange={(e) => setPin(e.target.value)}
