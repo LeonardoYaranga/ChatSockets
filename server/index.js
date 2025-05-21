@@ -320,7 +320,7 @@ io.on("connection", (socket) => {
   // Enviar mensaje
   socket.on("send_message", async ({ pin, message, user_id }) => {
     try {
-      // console.log("Mensaje recibido:", message);
+      console.log("Mensaje recibido:", message);
       const [session] = await db.query(
         "SELECT s.id, s.sala_id FROM sessions s JOIN salas r ON s.sala_id = r.id WHERE s.user_id = ? AND r.pin = ?",
         [user_id, pin]
@@ -343,7 +343,7 @@ io.on("connection", (socket) => {
         message,
         create_at: new Date().toISOString(),
       });
-      // console.log(`Mensaje en sala ${pin} de ${user[0].nickname}: ${message}`);
+      console.log(`Mensaje en sala ${pin} de ${user[0].nickname}: ${message}`);
     } catch (error) {
       console.error(error);
       socket.emit("error", "Error al enviar el mensaje");
