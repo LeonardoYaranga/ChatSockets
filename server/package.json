@@ -17,5 +17,9 @@
     "mysql2": "^3.14.1",
     "socket.io": "^4.8.1",
     "socketio": "^1.0.0"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
   }
 }

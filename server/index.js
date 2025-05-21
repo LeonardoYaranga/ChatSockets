@@ -18,7 +18,7 @@ const db = mysql.createPool({
   host: process.env.DB_HOST || "localhost",
   user: process.env.DB_USER || "root",
   password: process.env.DB_PASSWORD || "1234",
-  database: process.env.DB_NAME || "ChatWebSocket"
+  database: process.env.DB_NAME || "ChatWebSocket",
 });
 
 // Generar PIN aleatorio
@@ -26,19 +26,27 @@ function generatePin() {
   return Math.floor(100000 + Math.random() * 900000).toString(); // PIN de 6 dígitos
 }
 
-// Endpoint para crear usuario
+// Endpoint para crear usuario   //TODO: Cambiar a io.on("crear_usuario")
 app.post("/api/users", async (req, res) => {
   const { nickname, device_id } = req.body;
   if (!nickname || !device_id) {
-    return res.status(400).json({ error: "Nickname y device_id son requeridos" });
+    return res
+      .status(400)
+      .json({ error: "Nickname y device_id son requeridos" });
   }
   try {
-    const [existingUser] = await db.query("SELECT id FROM users WHERE nickname = ?", [nickname]);
+    const [existingUser] = await db.query(
+      "SELECT id FROM users WHERE nickname = ?",
+      [nickname]
+    );
     let user_id;
     if (existingUser[0]) {
       user_id = existingUser[0].id;
     } else {
-      const [result] = await db.query("INSERT INTO users (nickname, device_id) VALUES (?, ?)", [nickname, device_id]);
+      const [result] = await db.query(
+        "INSERT INTO users (nickname, device_id) VALUES (?, ?)",
+        [nickname, device_id]
+      );
       user_id = result.insertId;
     }
 
@@ -59,11 +67,13 @@ app.post("/api/users", async (req, res) => {
   }
 });
 
-// Crear una sala (HTTP endpoint)
+// Crear una sala (HTTP endpoint)  //TODO: Cambiar a io.on("crear_sala")
 app.post("/api/salas", async (req, res) => {
   const { max_users } = req.body;
   if (!Number.isInteger(max_users) || max_users < 1 || max_users > 10) {
-    return res.status(400).json({ error: "El número máximo de usuarios debe estar entre 1 y 10" });
+    return res
+      .status(400)
+      .json({ error: "El número máximo de usuarios debe estar entre 1 y 10" });
   }
 
   let pin;
@@ -74,7 +84,10 @@ app.post("/api/salas", async (req, res) => {
       if (rows.length === 0) break;
     } while (true);
 
-    const [result] = await db.query("INSERT INTO salas (pin, max_users) VALUES (?, ?)", [pin, max_users]);
+    const [result] = await db.query(
+      "INSERT INTO salas (pin, max_users) VALUES (?, ?)",
+      [pin, max_users]
+    );
     res.json({ pin, sala_id: result.insertId });
   } catch (error) {
     console.error(error);
@@ -85,24 +98,67 @@ app.post("/api/salas", async (req, res) => {
 const disconnectTimeouts = {};
 const activeSockets = {};
 const activeUsers = {};
+const ipToSockets = new Map();
 
 // Manejar conexiones
 io.on("connection", (socket) => {
   console.log("Cliente conectado:", socket.id, "IP:", socket.handshake.address);
+  const clientIp =
+    socket.handshake.address.replace(/^::ffff:/, "") ||
+    socket.handshake.address;
+  console.log("Cliente conectado:", socket.id, "IP:", clientIp);
+  console.log(
+    "Estado de ipToSockets antes:",
+    Array.from(ipToSockets.entries())
+  );
+
+  // Verificar si ya existe una sesión activa desde esta IP
+  const previousSocketByIp = ipToSockets.get(clientIp);
+  console.log(previousSocketByIp);
+  if (previousSocketByIp && io.sockets.sockets.get(previousSocketByIp)) {
+    console.log(
+      `Sesión activa encontrada para IP ${clientIp}: socket ${previousSocketByIp}`
+    );
+    console.log(
+      `Rechazando nuevo intento de conexión desde socket ${socket.id}`
+    );
+    socket.emit(
+      "session_conflict",
+      "Ya hay una sesión activa desde este dispositivo."
+    );
+    socket.disconnect(true);
+    console.log(`Socket ${socket.id} desconectado por IP duplicada`);
+    return; // Terminar la conexión
+  }
+
+  ipToSockets.set(clientIp, socket.id);
+  console.log(
+    "Estado de ipToSockets después:",
+    Array.from(ipToSockets.entries())
+  );
 
   // Unirse a una sala
   socket.on("join_room", async ({ pin, user_id, device_id }) => {
     try {
-      socket.user_id = user_id; 
+      socket.user_id = user_id;
       // Desconectar socket anterior si existe
-      if (activeSockets[device_id] && activeSockets[device_id].id !== socket.id) {
-        activeSockets[device_id].emit("error", "Se ha iniciado sesión en otra pestaña o ventana.");
+      if (
+        activeSockets[device_id] &&
+        activeSockets[device_id].id !== socket.id
+      ) {
+        activeSockets[device_id].emit(
+          "error",
+          "Se ha iniciado sesión en otra pestaña o ventana."
+        );
         activeSockets[device_id].disconnect(true);
       }
       activeSockets[device_id] = socket;
 
       if (activeUsers[user_id] && activeUsers[user_id].id !== socket.id) {
-        activeUsers[user_id].emit("session_conflict", "Se ha iniciado sesión en otro dispositivo.");
+        activeUsers[user_id].emit(
+          "session_conflict",
+          "Se ha iniciado sesión en otro dispositivo."
+        );
         activeUsers[user_id].disconnect(true);
       }
       activeUsers[user_id] = socket;
@@ -113,7 +169,9 @@ io.on("connection", (socket) => {
       }
 
       // Buscar la sala por PIN
-      const [sala] = await db.query("SELECT id FROM salas WHERE pin = ?", [pin]);
+      const [sala] = await db.query("SELECT id FROM salas WHERE pin = ?", [
+        pin,
+      ]);
       if (!sala[0]) {
         return socket.emit("error", "Sala no encontrada");
       }
@@ -158,18 +216,27 @@ io.on("connection", (socket) => {
         "SELECT u.nickname FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.sala_id = ?",
         [sala_id]
       );
-      io.to(pin).emit("user_list", users.map(u => u.nickname));
+      io.to(pin).emit(
+        "user_list",
+        users.map((u) => u.nickname)
+      );
 
       // Notificar solo el último usuario que se unió
       if (users.length > 0) {
         const lastUser = users[users.length - 1].nickname;
-        console.log("Se unio el usuario", lastUser ," a la sala: ", pin, " Con socketId: ", socket.id)
+        console.log(
+          "Se unio el usuario",
+          lastUser,
+          " a la sala: ",
+          pin,
+          " Con socketId: ",
+          socket.id
+        );
         io.to(pin).emit("system_message", `Se ha unido ${lastUser}`);
       }
 
       // Notificar unión exitosa
       socket.emit("joined_room", { pin, user_id });
-
     } catch (error) {
       console.error(error);
       socket.emit("error", "Error al unirse a la sala");
@@ -188,14 +255,18 @@ io.on("connection", (socket) => {
         return;
       }
 
-      const [user] = await db.query("SELECT nickname FROM users WHERE id = ?", [user_id]);
-      await db.query("INSERT INTO messages (message, user_id, sala_id) VALUES (?, ?, ?)", 
-        [message, user_id, session[0].sala_id]);
-      
-      io.to(pin).emit("receive_message", { 
-        nickname: user[0].nickname, 
-        message, 
-        create_at: new Date().toISOString() 
+      const [user] = await db.query("SELECT nickname FROM users WHERE id = ?", [
+        user_id,
+      ]);
+      await db.query(
+        "INSERT INTO messages (message, user_id, sala_id) VALUES (?, ?, ?)",
+        [message, user_id, session[0].sala_id]
+      );
+
+      io.to(pin).emit("receive_message", {
+        nickname: user[0].nickname,
+        message,
+        create_at: new Date().toISOString(),
       });
       console.log(`Mensaje en sala ${pin} de ${user[0].nickname}: ${message}`);
     } catch (error) {
@@ -218,18 +289,29 @@ io.on("connection", (socket) => {
         );
         if (session[0]) {
           const { sala_id, pin } = session[0];
-          await db.query("DELETE FROM sessions WHERE device_id = ?", [socket.device_id]);
-          
+          await db.query("DELETE FROM sessions WHERE device_id = ?", [
+            socket.device_id,
+          ]);
+
           // Actualizar lista de usuarios
           const [users] = await db.query(
             "SELECT u.nickname FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.sala_id = ?",
             [sala_id]
           );
-          io.to(pin).emit("user_list", users.map(u => u.nickname));
+          io.to(pin).emit(
+            "user_list",
+            users.map((u) => u.nickname)
+          );
 
           // Eliminar sala si está vacía
-          const [sessions] = await db.query("SELECT COUNT(*) as count FROM sessions WHERE sala_id = ?", [sala_id]);
-          const [messageCount] = await db.query("SELECT COUNT(*) AS count FROM messages WHERE sala_id = ?", [sala_id]);
+          const [sessions] = await db.query(
+            "SELECT COUNT(*) as count FROM sessions WHERE sala_id = ?",
+            [sala_id]
+          );
+          const [messageCount] = await db.query(
+            "SELECT COUNT(*) AS count FROM messages WHERE sala_id = ?",
+            [sala_id]
+          );
           if (sessions[0].count === 0 && messageCount[0].count === 0) {
             await db.query("DELETE FROM salas WHERE id = ?", [sala_id]);
             console.log(`Sala ${pin} eliminada`);
@@ -239,7 +321,12 @@ io.on("connection", (socket) => {
       } catch (error) {
         console.error(error);
       }
-      console.log("Cliente desconectado:", socket.id, "IP:", socket.handshake.address);
+      console.log(
+        "Cliente desconectado:",
+        socket.id,
+        "IP:",
+        socket.handshake.address
+      );
       delete disconnectTimeouts[socket.device_id];
     }, 3000);
   });

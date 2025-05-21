@@ -8,6 +8,7 @@ import { Card } from "primereact/card";
 import { RoomForm } from "./RoomForm";
 import { MessageList } from "./MessageList";
 import { ParticipantsModal } from "./ParticipantesModal";
+import FingerprintJS from "@fingerprintjs/fingerprintjs";
 
 const API_URL =
   import.meta.env.VITE_SOCKET_SERVER_URL || "http://localhost:5000";
@@ -39,46 +40,78 @@ export const Chat: React.FC = () => {
   const [socketReady, setSocketReady] = useState(false);
   const [wasSessionConflict, setWasSessionConflict] = useState(false);
 
-  // Generar o recuperar device_id
-  const [deviceId] = useState<string>(() => {
-    const storedId = localStorage.getItem("device_id");
-    if (storedId) return storedId;
-    const newId = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
-      /[xy]/g,
-      (c) => {
-        const r = (Math.random() * 16) | 0;
-        return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
-      }
-    );
-    localStorage.setItem("device_id", newId);
-    return newId;
-  });
-
-  // Inicializar socket y eventos
+  // Generar o recuperar device_id con FingerprintJS
+  const [deviceId, setDeviceId] = useState<string>("");
   useEffect(() => {
+    console.log("Iniciando generación de deviceId...");
+    const initializeFingerprint = async () => {
+      try {
+        const storedId = localStorage.getItem("device_id");
+        if (storedId) {
+          console.log("device_id encontrado en localStorage:", storedId);
+          setDeviceId(storedId);
+          return;
+        }
+        console.log(
+          "No hay device_id en localStorage, cargando FingerprintJS..."
+        );
+        const fp = await FingerprintJS.load(); // Sin opciones, ya que exclude no es soportado
+        console.log("FingerprintJS cargado, obteniendo visitorId...");
+        const result = await fp.get();
+        const newId = result.visitorId;
+        console.log("Nuevo device_id generado:", newId);
+        localStorage.setItem("device_id", newId);
+        setDeviceId(newId);
+      } catch (error) {
+        console.error("Error al generar device_id con FingerprintJS:", error);
+        const fallbackId = crypto.randomUUID();
+        console.log("Usando device_id de respaldo:", fallbackId);
+        localStorage.setItem("device_id", fallbackId);
+        setDeviceId(fallbackId);
+      }
+    };
+    initializeFingerprint().catch((error) => {
+      console.error("Error crítico en initializeFingerprint:", error);
+      const fallbackId = crypto.randomUUID();
+      console.log("Usando device_id de respaldo crítico:", fallbackId);
+      localStorage.setItem("device_id", fallbackId);
+      setDeviceId(fallbackId);
+    });
+  }, []);
+
+  useEffect(() => {
+    console.log("device_id:", deviceId);
     socketRef.current = io(API_URL, {
       transports: ["websocket"],
-      autoConnect: false,
+      autoConnect: true,
     });
+    console.log("Socket creado:", socketRef.current);
     const socket = socketRef.current;
     setSocketReady(true);
 
+    // Registrar manejadores de eventos
     socket.on("connect", () => {
       setConnected(true);
-      console.log("Conectado al servidor");
+      console.log("Conectado al servidor con socketId:", socket.id);
     });
 
-    socket.on(
-      "room_created",
-      ({ pin, sala_id }: { pin: string; sala_id: number }) => {
-        setPin(pin);
-        toast.current?.show({
-          severity: "success",
-          summary: "Sala Creada",
-          detail: `Sala con PIN: ${pin}`,
-        });
-      }
-    );
+    socket.on("session_conflict", (msg: string) => {
+      console.log("Evento session_conflict recibido:", msg);
+      setWasSessionConflict(true);
+      toast.current?.show({
+        severity: "warn",
+        summary: "Sesión cerrada",
+        detail: msg || "Se ha iniciado sesión en otro dispositivo.",
+      });
+      setNickName("");
+      setUserId(null);
+      setIsInRoom(false);
+      setCurrentPin("");
+      setPin("");
+      setMessages([]);
+      localStorage.removeItem("nickname");
+      localStorage.removeItem("device_id");
+    });
 
     socket.on(
       "joined_room",
@@ -126,44 +159,29 @@ export const Chat: React.FC = () => {
       });
     });
 
-    socket.on("session_conflict", (msg: string) => {
-      setWasSessionConflict(true);
-      toast.current?.show({
-        severity: "warn",
-        summary: "Sesión cerrada",
-        detail: msg || "Se ha iniciado sesión en otro dispositivo.",
-      });
-      // Opcional: limpiar estado, cerrar sesión, etc.
-      setNickName("");
-      setUserId(null);
-      setIsInRoom(false);
-      setCurrentPin("");
-      setPin("");
-      setMessages([]);
-      localStorage.removeItem("nickname");
-      localStorage.removeItem("device_id");
-    });
-
     socket.on("disconnect", () => {
       setConnected(false);
       setIsInRoom(false);
       setCurrentPin("");
       setMessages([]);
+      console.log(
+        "Desconectado del servidor, wasSessionConflict:",
+        wasSessionConflict
+      );
       if (!wasSessionConflict && nickName) {
         toast.current?.show({
           severity: "warn",
           summary: "Desconectado",
           detail: "Se perdió la conexión con el servidor",
         });
-      }
-      else {
+      } else {
         toast.current?.show({
           severity: "info",
           summary: "Sesión cerrada",
           detail: "Se ha cerrado la sesión por otro dispositivo",
         });
       }
-      setWasSessionConflict(false); 
+      setWasSessionConflict(false);
     });
 
     return () => {
@@ -173,7 +191,7 @@ export const Chat: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if ((socketReady && nickName && deviceId)) {
+    if (socketReady && nickName && deviceId) {
       autoLogin(nickName, deviceId);
     }
   }, [socketReady, nickName, deviceId]);
@@ -221,9 +239,10 @@ export const Chat: React.FC = () => {
         }
       }
     } catch (error) {
+      console.error("Error al conectar con el servidor:", error);
       toast.current?.show({
         severity: "error",
-        summary: "Error",
+        summary: `${error}`,
         detail: "Error al reconectar sesión",
       });
     }
@@ -281,7 +300,7 @@ export const Chat: React.FC = () => {
     } catch (error) {
       toast.current?.show({
         severity: "error",
-        summary: "Error",
+        summary: `${error}`,
         detail: "Error al conectar con el servidor",
       });
     }
@@ -381,6 +400,7 @@ export const Chat: React.FC = () => {
   if (!nickName) {
     return (
       <div className="app">
+        <Toast ref={toast} />
         <Card title="Bienvenido">
           <div className="p-fluid">
             <div className="p-field">
