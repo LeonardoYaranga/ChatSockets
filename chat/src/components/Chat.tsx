@@ -8,7 +8,6 @@ import { Card } from "primereact/card";
 import { RoomForm } from "./RoomForm";
 import { MessageList } from "./MessageList";
 import { ParticipantsModal } from "./ParticipantesModal";
-import { message } from "antd";
 import { SalasModal } from "./SalasModal";
 import { ConfirmDialog } from "primereact/confirmdialog";
 
@@ -28,7 +27,7 @@ export const Chat: React.FC = () => {
   );
   const [tempNickName, setTempNickName] = useState<string>("");
   const [messages, setMessages] = useState<Message[]>([]);
-  const [messageBack, setMessage] = useState<string>("");
+  const [message, setMessage] = useState<string>("");
   const [connected, setConnected] = useState<boolean>(false);
   const [pin, setPin] = useState<string>("");
   const [isInRoom, setIsInRoom] = useState<boolean>(false);
@@ -133,7 +132,12 @@ export const Chat: React.FC = () => {
 
     socket.on("session_conflict", (msg: string) => {
       setWasSessionConflict(true);
-      message.warning(msg || "Se ha iniciado sesión en otro dispositivo.");
+      //Toast de sesión cerrada
+      toast.current?.show({
+        severity: "warn",
+        summary: "Sesión cerrada",
+        detail: msg,
+      });
       // Opcional: limpiar estado, cerrar sesión, etc.
       setNickName("");
       setUserId(null);
@@ -367,7 +371,7 @@ export const Chat: React.FC = () => {
   };
 
   const sendMessage = () => {
-    if (!messageBack.trim() || !connected || !isInRoom) {
+    if (!message.trim() || !connected || !isInRoom) {
       toast.current?.show({
         severity: "error",
         summary: "Error",
@@ -377,7 +381,7 @@ export const Chat: React.FC = () => {
     }
     socketRef.current?.emit("send_message", {
       pin: currentPin,
-      messageBack,
+      message,
       user_id: userId,
     });
     setMessage("");
@@ -503,7 +507,7 @@ export const Chat: React.FC = () => {
             <MessageList messages={messages} nickName={nickName} />
             <div className="field input-chat">
               <InputTextarea
-                value={messageBack}
+                value={message}
                 onChange={(e) => setMessage(e.target.value)}
                 placeholder="Escribe tu mensaje"
                 rows={1}
