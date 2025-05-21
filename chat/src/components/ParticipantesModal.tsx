@@ -3,16 +3,22 @@ import { Button } from "primereact/button";
 
 interface ParticipantsModalProps {
   participants: string[];
+  maxUsers?: number;
   onClose: () => void;
 }
 
 export const ParticipantsModal: React.FC<ParticipantsModalProps> = ({
   participants,
+  maxUsers,
   onClose,
 }) => (
   <div className="modal-overlay">
     <div className="modal-box">
-      <h3>Participantes activos</h3>
+      {maxUsers && (
+        <h3>
+          Participantes activos {participants.length} de {maxUsers}
+        </h3>
+      )}
       <ul className="participants-list">
         {participants.map((p) => (
           <li key={p}>{p}</li>
