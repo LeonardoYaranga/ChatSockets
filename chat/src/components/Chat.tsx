@@ -8,7 +8,9 @@ import { Card } from "primereact/card";
 import { RoomForm } from "./RoomForm";
 import { MessageList } from "./MessageList";
 import { ParticipantsModal } from "./ParticipantesModal";
-import FingerprintJS from "@fingerprintjs/fingerprintjs";
+import { message } from "antd";
+import { SalasModal } from "./SalasModal";
+import { ConfirmDialog } from "primereact/confirmdialog";
 
 const API_URL =
   import.meta.env.VITE_SOCKET_SERVER_URL || "http://localhost:5000";
@@ -26,7 +28,7 @@ export const Chat: React.FC = () => {
   );
   const [tempNickName, setTempNickName] = useState<string>("");
   const [messages, setMessages] = useState<Message[]>([]);
-  const [message, setMessage] = useState<string>("");
+  const [messageBack, setMessage] = useState<string>("");
   const [connected, setConnected] = useState<boolean>(false);
   const [pin, setPin] = useState<string>("");
   const [isInRoom, setIsInRoom] = useState<boolean>(false);
@@ -37,6 +39,7 @@ export const Chat: React.FC = () => {
   const toast = useRef<Toast>(null);
   const [showParticipants, setShowParticipants] = useState(false);
   const [participants, setParticipants] = useState<string[]>([]);
+  const [maxUsers, setMaxUsers] = useState<number>(0);
   const [socketReady, setSocketReady] = useState(false);
   const [wasSessionConflict, setWasSessionConflict] = useState(false);
 
@@ -146,8 +149,9 @@ export const Chat: React.FC = () => {
       ]);
     });
 
-    socket.on("user_list", (users: string[]) => {
-      setParticipants(users);
+    socket.on("user_list", (data: { users: string[]; max_users: number }) => {
+      setParticipants(data.users);
+      setMaxUsers(data.max_users);
     });
 
     socket.on("error", (message: string) => {
@@ -157,6 +161,20 @@ export const Chat: React.FC = () => {
         summary: "Error",
         detail: message,
       });
+    });
+
+    socket.on("session_conflict", (msg: string) => {
+      setWasSessionConflict(true);
+      message.warning(msg || "Se ha iniciado sesión en otro dispositivo.");
+      // Opcional: limpiar estado, cerrar sesión, etc.
+      setNickName("");
+      setUserId(null);
+      setIsInRoom(false);
+      setCurrentPin("");
+      setPin("");
+      setMessages([]);
+      localStorage.removeItem("nickname");
+      localStorage.removeItem("device_id");
     });
 
     socket.on("disconnect", () => {
@@ -337,10 +355,14 @@ export const Chat: React.FC = () => {
       const response = await fetch(`${API_URL}/api/salas`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ max_users: maxClients }),
+        body: JSON.stringify({ max_users: maxClients, creator_id: userId }),
       });
       const data = await response.json();
       if (!response.ok) {
+        if (data.error && data.error.includes("excedido el número máximo")) {
+          await fetchSalas();
+          setShowSalasModal(true);
+        }
         toast.current?.show({
           severity: "error",
           summary: "Error",
@@ -381,7 +403,7 @@ export const Chat: React.FC = () => {
   };
 
   const sendMessage = () => {
-    if (!message.trim() || !connected || !isInRoom) {
+    if (!messageBack.trim() || !connected || !isInRoom) {
       toast.current?.show({
         severity: "error",
         summary: "Error",
@@ -391,10 +413,24 @@ export const Chat: React.FC = () => {
     }
     socketRef.current?.emit("send_message", {
       pin: currentPin,
-      message,
+      messageBack,
       user_id: userId,
     });
     setMessage("");
+  };
+
+  const [showSalasModal, setShowSalasModal] = useState(false);
+  const [salas, setSalas] = useState([]);
+
+  const fetchSalas = async () => {
+    const res = await fetch(`${API_URL}/api/salas/usuario/${userId}`);
+    const data = await res.json();
+    setSalas(data);
+  };
+
+  const handleDeleteSala = async (salaId: number) => {
+    await fetch(`${API_URL}/api/salas/${salaId}`, { method: "DELETE" });
+    fetchSalas();
   };
 
   if (!nickName) {
@@ -427,14 +463,50 @@ export const Chat: React.FC = () => {
 
   return (
     <div className="app">
+      <ConfirmDialog />
       <div className="pb-4 px-4">
         <Toast ref={toast} />
+        {isInRoom && (
+          <div
+            style={{
+              position: "absolute",
+              top: 16,
+              left: 16,
+              zIndex: 10,
+              background: "#fff",
+              color: "#222",
+              borderRadius: 8,
+              padding: "0.25em 0.75em",
+              boxShadow: "0 2px 8px #0001",
+              fontWeight: 600,
+              fontSize: "1.1em",
+            }}
+          >
+            {participants.length}/{maxUsers}
+          </div>
+        )}
+        {showSalasModal && (
+          <SalasModal
+            salas={salas}
+            onClose={() => setShowSalasModal(false)}
+            onDelete={handleDeleteSala}
+          />
+        )}
         <h1>Chat con Socket.IO</h1>
         <Button
           label="Cerrar sesión"
           icon="pi pi-sign-out"
-          className="p-button-raised p-button-secondary mb-3"
+          className="p-button-raised p-button-secondary mb-3 mx-3"
           onClick={logout}
+        />
+        <Button
+          label="Mis salas"
+          icon="pi pi-list"
+          className="p-button-raised p-button-help mb-3  mx-3"
+          onClick={async () => {
+            await fetchSalas();
+            setShowSalasModal(true);
+          }}
         />
         <RoomForm
           maxClients={maxClients}
@@ -457,6 +529,7 @@ export const Chat: React.FC = () => {
       {showParticipants && (
         <ParticipantsModal
           participants={participants}
+          maxUsers={maxUsers}
           onClose={() => setShowParticipants(false)}
         />
       )}
@@ -467,7 +540,7 @@ export const Chat: React.FC = () => {
             <MessageList messages={messages} nickName={nickName} />
             <div className="field input-chat">
               <InputTextarea
-                value={message}
+                value={messageBack}
                 onChange={(e) => setMessage(e.target.value)}
                 placeholder="Escribe tu mensaje"
                 rows={1}
