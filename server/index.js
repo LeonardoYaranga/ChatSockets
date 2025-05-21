@@ -71,16 +71,24 @@ app.post("/api/users", async (req, res) => {
 app.post("/api/salas", async (req, res) => {
   const { max_users, creator_id } = req.body;
   if (!Number.isInteger(max_users) || max_users < 1 || max_users > 10) {
-    return res.status(400).json({ error: "El número máximo de usuarios debe estar entre 1 y 10" });
+    return res
+      .status(400)
+      .json({ error: "El número máximo de usuarios debe estar entre 1 y 10" });
   }
   if (!creator_id) {
     return res.status(400).json({ error: "creator_id es requerido" });
   }
 
   // Validar máximo de 3 salas por usuario
-  const [salasCreadas] = await db.query("SELECT COUNT(*) as count FROM salas WHERE creator_id = ?", [creator_id]);
+  const [salasCreadas] = await db.query(
+    "SELECT COUNT(*) as count FROM salas WHERE creator_id = ?",
+    [creator_id]
+  );
   if (salasCreadas[0].count >= 3) {
-    return res.status(400).json({ error: "Has excedido el número máximo de salas creadas (3). Borra alguna para crear una nueva." });
+    return res.status(400).json({
+      error:
+        "Has excedido el número máximo de salas creadas (3). Borra alguna para crear una nueva.",
+    });
   }
 
   let pin;
@@ -188,7 +196,10 @@ io.on("connection", (socket) => {
 
         // Eliminar la sesión anterior
         await db.query("DELETE FROM sessions WHERE device_id = ?", [device_id]);
-        console.log("Desconectando socket anterior:", activeSockets[device_id].id);
+        console.log(
+          "Desconectando socket anterior:",
+          activeSockets[device_id].id
+        );
         delete activeSockets[device_id];
       }
       activeSockets[device_id] = socket;
@@ -200,7 +211,10 @@ io.on("connection", (socket) => {
         );
         activeUsers[user_id].disconnect(true);
         // Eliminar la sesión anterior
-        await db.query("DELETE FROM sessions WHERE user_id = ? AND device_id = ?", [user_id, activeUsers[user_id].device_id]);
+        await db.query(
+          "DELETE FROM sessions WHERE user_id = ? AND device_id = ?",
+          [user_id, activeUsers[user_id].device_id]
+        );
         console.log("Desconectando socket anterior:", activeUsers[user_id].id);
         delete activeUsers[user_id];
       }
@@ -212,7 +226,10 @@ io.on("connection", (socket) => {
       }
 
       // Buscar la sala por PIN
-      const [sala] = await db.query("SELECT id, max_users FROM salas WHERE pin = ?", [pin]);
+      const [sala] = await db.query(
+        "SELECT id, max_users FROM salas WHERE pin = ?",
+        [pin]
+      );
       if (!sala[0]) {
         return socket.emit("error", "Sala no encontrada");
       }
@@ -225,7 +242,10 @@ io.on("connection", (socket) => {
         [sala_id]
       );
       if (usersMax.length >= max_users) {
-        return socket.emit("error", `La sala ya está llena (${max_users} usuarios máximo)`);
+        return socket.emit(
+          "error",
+          `La sala ya está llena (${max_users} usuarios máximo)`
+        );
       }
 
       // Verificar si ya existe una sesión para este user_id y device_id en esta sala
@@ -266,10 +286,13 @@ io.on("connection", (socket) => {
         "SELECT u.nickname FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.sala_id = ?",
         [sala_id]
       );
-      const [salaInfo] = await db.query("SELECT max_users FROM salas WHERE id = ?", [sala_id]);
+      const [salaInfo] = await db.query(
+        "SELECT max_users FROM salas WHERE id = ?",
+        [sala_id]
+      );
       io.to(pin).emit("user_list", {
-        users: users.map(u => u.nickname),
-        max_users: salaInfo[0]?.max_users || 0
+        users: users.map((u) => u.nickname),
+        max_users: salaInfo[0]?.max_users || 0,
       });
 
       // Notificar solo el último usuario que se unió
@@ -297,6 +320,7 @@ io.on("connection", (socket) => {
   // Enviar mensaje
   socket.on("send_message", async ({ pin, message, user_id }) => {
     try {
+      // console.log("Mensaje recibido:", message);
       const [session] = await db.query(
         "SELECT s.id, s.sala_id FROM sessions s JOIN salas r ON s.sala_id = r.id WHERE s.user_id = ? AND r.pin = ?",
         [user_id, pin]
@@ -319,7 +343,7 @@ io.on("connection", (socket) => {
         message,
         create_at: new Date().toISOString(),
       });
-      console.log(`Mensaje en sala ${pin} de ${user[0].nickname}: ${message}`);
+      // console.log(`Mensaje en sala ${pin} de ${user[0].nickname}: ${message}`);
     } catch (error) {
       console.error(error);
       socket.emit("error", "Error al enviar el mensaje");
@@ -340,16 +364,21 @@ io.on("connection", (socket) => {
         );
         if (session[0]) {
           const { sala_id, pin } = session[0];
-          await db.query("DELETE FROM sessions WHERE device_id = ?", [socket.device_id]);
-          
+          await db.query("DELETE FROM sessions WHERE device_id = ?", [
+            socket.device_id,
+          ]);
+
           const [users] = await db.query(
             "SELECT u.nickname FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.sala_id = ?",
             [sala_id]
           );
-          const [salaInfo] = await db.query("SELECT max_users FROM salas WHERE id = ?", [sala_id]);
+          const [salaInfo] = await db.query(
+            "SELECT max_users FROM salas WHERE id = ?",
+            [sala_id]
+          );
           io.to(pin).emit("user_list", {
-            users: users.map(u => u.nickname),
-            max_users: salaInfo[0]?.max_users || 0
+            users: users.map((u) => u.nickname),
+            max_users: salaInfo[0]?.max_users || 0,
           });
 
           // Eliminar sala si está vacía

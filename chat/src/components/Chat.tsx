@@ -11,6 +11,7 @@ import { ParticipantsModal } from "./ParticipantesModal";
 import { message } from "antd";
 import { SalasModal } from "./SalasModal";
 import { ConfirmDialog } from "primereact/confirmdialog";
+import FingerprintJS from "@fingerprintjs/fingerprintjs";
 
 const API_URL =
   import.meta.env.VITE_SOCKET_SERVER_URL || "http://localhost:5000";
@@ -411,9 +412,10 @@ export const Chat: React.FC = () => {
       });
       return;
     }
+    // console.log("Enviando mensaje:", messageBack);
     socketRef.current?.emit("send_message", {
       pin: currentPin,
-      messageBack,
+      message: messageBack,
       user_id: userId,
     });
     setMessage("");
